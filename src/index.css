@@ -28,3 +28,13 @@
 .recharts-cartesian-grid-horizontal line,
 .recharts-cartesian-grid-vertical line { stroke: #222230; }
 .recharts-text { fill: #6b7280; font-size: 11px; }
+
+/* Leaflet dark popup */
+.dark-popup .leaflet-popup-content-wrapper {
+  background: #1a1a25;
+  border: 1px solid #222230;
+  border-radius: 8px;
+  color: #e5e7eb;
+}
+.dark-popup .leaflet-popup-tip { background: #1a1a25; }
+.dark-popup .leaflet-popup-close-button { color: #6b7280; }

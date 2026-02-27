@@ -1,6 +1,7 @@
 import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { Activity, BarChart3, Trophy, Map, LineChart, LogOut } from 'lucide-react'
+import { Activity, BarChart3, Trophy, Map, LineChart, LogOut, RefreshCw } from 'lucide-react'
+import { useActivities } from '../contexts/ActivityContext'
 
 const navItems = [
   { to: '/', icon: Activity, label: 'Cockpit' },
@@ -10,7 +11,23 @@ const navItems = [
   { to: '/analysis', icon: LineChart, label: 'Analyse' },
 ]
 
+function formatAgo(date) {
+  const diff = Date.now() - date.getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return "a l'instant"
+  if (mins < 60) return `il y a ${mins}min`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `il y a ${hours}h`
+  return `il y a ${Math.floor(hours / 24)}j`
+}
+
 export default function Layout({ children, athlete, onLogout }) {
+  const { syncing, refresh, cacheInfo } = useActivities()
+
+  const lastSyncLabel = cacheInfo?.lastSync
+    ? `${cacheInfo.count} runs | sync ${formatAgo(cacheInfo.lastSync)}`
+    : 'Non synchronise'
+
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-dark-600 bg-dark-800/80 backdrop-blur-sm sticky top-0 z-50">
@@ -29,6 +46,14 @@ export default function Layout({ children, athlete, onLogout }) {
             </nav>
           </div>
           <div className="flex items-center gap-4">
+            <div className="hidden md:flex items-center gap-2 text-xs text-gray-500">
+              <span>{lastSyncLabel}</span>
+              <button onClick={refresh} disabled={syncing}
+                className={`p-1 rounded hover:bg-dark-600 transition-colors ${syncing ? 'animate-spin text-strava' : ''}`}
+                title="Forcer la synchronisation">
+                <RefreshCw size={14} />
+              </button>
+            </div>
             {athlete && (
               <div className="flex items-center gap-2">
                 {athlete.profile_pic && <img src={athlete.profile_pic} alt="" className="w-7 h-7 rounded-full" />}

@@ -1,8 +1,9 @@
-import React from 'react'
+import React, { useMemo } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts'
-import { api } from '../api'
-import { useAPI } from '../hooks/useAPI'
+import { useActivities } from '../contexts/ActivityContext'
+import { computePRs, computeBestByYear, computeProjections, fmtTime } from '../lib/compute'
 import ChartCard from '../components/ChartCard'
+import RunMap from '../components/RunMap'
 import Loader from '../components/Loader'
 
 const DC = { '5k': '#FC4C02', '10k': '#3b82f6', 'semi': '#10b981', 'marathon': '#f59e0b' }
@@ -27,31 +28,59 @@ function PTip({ active, payload }) {
 }
 
 export default function Performance() {
-  const { data: records, loading: rL } = useAPI(() => api.records())
-  const { data: bestByYear } = useAPI(() => api.bestByYear())
-  const { data: projData } = useAPI(() => api.projections())
+  const { activities, loading } = useActivities()
 
-  if (rL) return <Loader />
+  const records = useMemo(() => computePRs(activities), [activities])
+  const bestByYear = useMemo(() => computeBestByYear(records), [records])
+  const projData = useMemo(() => computeProjections(records, activities), [records, activities])
+
+  // Get polyline for best PR of each distance
+  const prMapRuns = useMemo(() => {
+    const runs = []
+    Object.entries(records).forEach(([dt, recs]) => {
+      const best = recs.find(r => r.isBest)
+      if (best?.polyline) {
+        runs.push({
+          id: best.activity_id,
+          name: `PR ${DL[dt]} - ${best.formatted}`,
+          date: best.date,
+          distance: best.distance,
+          polyline: best.polyline,
+          distanceKm: Math.round(best.distance / 10) / 100,
+          pace: best.pace,
+        })
+      }
+    })
+    return runs
+  }, [records])
+
+  if (loading) return <Loader />
 
   return (
     <div>
       <h2 className="text-xl font-semibold mb-6">Performance & Records</h2>
-      {records && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {Object.entries(DL).map(([k, l]) => {
-            const best = records[k]?.find(r => r.is_best)
-            return (
-              <div key={k} className="card">
-                <div className="text-xs text-gray-500 uppercase tracking-wider">{l}</div>
-                <div className="text-2xl font-mono font-semibold text-white mt-1">{best ? best.formatted : '-'}</div>
-                {best && <div className="text-xs text-gray-500 mt-1">{best.pace} | {best.date?.slice(0,10)}</div>}
-              </div>
-            )
-          })}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        {Object.entries(DL).map(([k, l]) => {
+          const best = records[k]?.find(r => r.isBest)
+          return (
+            <div key={k} className="card">
+              <div className="text-xs text-gray-500 uppercase tracking-wider">{l}</div>
+              <div className="text-2xl font-mono font-semibold text-white mt-1">{best ? best.formatted : '-'}</div>
+              {best && <div className="text-xs text-gray-500 mt-1">{best.pace} | {best.date?.slice(0,10)}</div>}
+            </div>
+          )
+        })}
+      </div>
+
+      {prMapRuns.length > 0 && (
+        <div className="card mb-6">
+          <h3 className="text-sm font-medium text-gray-300 mb-4">Parcours des records personnels</h3>
+          <RunMap runs={prMapRuns} height={300} />
         </div>
       )}
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {records && Object.entries(records).map(([dt, runs]) => (
+        {Object.entries(records).map(([dt, runs]) => runs.length > 0 && (
           <ChartCard key={dt} title={`Evolution ${DL[dt] || dt}`}>
             <ResponsiveContainer width="100%" height={250}>
               <LineChart data={runs}>
@@ -64,7 +93,7 @@ export default function Performance() {
             </ResponsiveContainer>
           </ChartCard>
         ))}
-        {bestByYear && Object.entries(bestByYear).map(([dt, years]) => (
+        {Object.entries(bestByYear).map(([dt, years]) => years.length > 0 && (
           <ChartCard key={`y-${dt}`} title={`Meilleur temps annuel ${DL[dt] || dt}`}>
             <ResponsiveContainer width="100%" height={250}>
               <BarChart data={years}>

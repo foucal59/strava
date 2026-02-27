@@ -1,10 +1,10 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, ComposedChart, Line
 } from 'recharts'
-import { api } from '../api'
-import { useAPI } from '../hooks/useAPI'
+import { useActivities } from '../contexts/ActivityContext'
+import { computeWeekly, computeMonthly, computeYearly, computeRolling, getAllYears } from '../lib/compute'
 import ChartCard from '../components/ChartCard'
 import Loader from '../components/Loader'
 
@@ -25,26 +25,30 @@ function Tip({ active, payload, label }) {
 }
 
 export default function Volume() {
+  const { activities, loading } = useActivities()
   const yr = new Date().getFullYear()
   const [selYears, setSelYears] = useState([yr.toString()])
-  const { data: weekly, loading: wL } = useAPI(() => api.volumeWeekly(selYears.join(',')), [selYears])
-  const { data: monthly, loading: mL } = useAPI(() => api.volumeMonthly())
-  const { data: yearly, loading: yL } = useAPI(() => api.volumeYearly())
-  const { data: rolling, loading: rL } = useAPI(() => api.volumeRolling(90))
 
-  const avYears = yearly?.map(y => y.year) || []
+  const avYears = useMemo(() => getAllYears(activities), [activities])
+  const weekly = useMemo(() => computeWeekly(activities, selYears), [activities, selYears])
+  const monthly = useMemo(() => computeMonthly(activities), [activities])
+  const yearly = useMemo(() => computeYearly(activities), [activities])
+  const rolling = useMemo(() => computeRolling(activities, 90), [activities])
+
   const toggle = (y) => setSelYears(p => p.includes(y) ? p.filter(x => x !== y) : [...p, y])
 
-  const weeklyByYear = {}
-  weekly?.forEach(w => {
-    const wk = parseInt(w.week)
-    if (!weeklyByYear[wk]) weeklyByYear[wk] = { week: wk }
-    weeklyByYear[wk][w.year] = w.km
-    weeklyByYear[wk][`${w.year}_ma`] = w.ma_4w
-  })
-  const wChart = Object.values(weeklyByYear).sort((a, b) => a.week - b.week)
+  const weeklyByYear = useMemo(() => {
+    const map = {}
+    weekly.forEach(w => {
+      const wk = parseInt(w.week)
+      if (!map[wk]) map[wk] = { week: wk }
+      map[wk][w.year] = w.km
+      map[wk][`${w.year}_ma`] = w.ma_4w
+    })
+    return Object.values(map).sort((a, b) => a.week - b.week)
+  }, [weekly])
 
-  if (wL && mL) return <Loader />
+  if (loading) return <Loader />
 
   return (
     <div>
@@ -63,7 +67,7 @@ export default function Volume() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <ChartCard title="Kilometrage hebdomadaire" subtitle="Avec moyenne mobile 4 semaines">
           <ResponsiveContainer width="100%" height={300}>
-            <ComposedChart data={wChart}>
+            <ComposedChart data={weeklyByYear}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1a1a25" />
               <XAxis dataKey="week" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
@@ -79,7 +83,7 @@ export default function Volume() {
         </ChartCard>
 
         <ChartCard title="Volume 90 jours glissants">
-          {!rL && rolling && (
+          {rolling.length > 0 && (
             <ResponsiveContainer width="100%" height={300}>
               <ComposedChart data={rolling}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a1a25" />
@@ -93,7 +97,7 @@ export default function Volume() {
         </ChartCard>
 
         <ChartCard title="Volume mensuel">
-          {!mL && monthly && (
+          {monthly.length > 0 && (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={monthly}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a1a25" />
@@ -107,7 +111,7 @@ export default function Volume() {
         </ChartCard>
 
         <ChartCard title="Volume annuel comparatif">
-          {!yL && yearly && (
+          {yearly.length > 0 && (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={yearly}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1a1a25" />

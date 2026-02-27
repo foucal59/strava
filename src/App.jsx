@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { isAuthenticated, getAthlete, parseAuthCallback, clearTokens } from './api'
+import { ActivityProvider } from './contexts/ActivityContext'
 import Layout from './components/Layout'
 import Cockpit from './pages/Cockpit'
 import Volume from './pages/Volume'
@@ -41,14 +42,16 @@ export default function App() {
   const athlete = getAthlete()
 
   return (
-    <Layout athlete={athlete} onLogout={() => { clearTokens(); setAuthed(false) }}>
-      <Routes>
-        <Route path="/" element={<Cockpit />} />
-        <Route path="/volume" element={<Volume />} />
-        <Route path="/performance" element={<Performance />} />
-        <Route path="/segments" element={<Segments />} />
-        <Route path="/analysis" element={<Analysis />} />
-      </Routes>
-    </Layout>
+    <ActivityProvider>
+      <Layout athlete={athlete} onLogout={() => { clearTokens(); setAuthed(false) }}>
+        <Routes>
+          <Route path="/" element={<Cockpit />} />
+          <Route path="/volume" element={<Volume />} />
+          <Route path="/performance" element={<Performance />} />
+          <Route path="/segments" element={<Segments />} />
+          <Route path="/analysis" element={<Analysis />} />
+        </Routes>
+      </Layout>
+    </ActivityProvider>
   )
 }
