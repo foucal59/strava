@@ -2,7 +2,6 @@ import React from 'react'
 
 export default function StatCard({ label, value, unit, trend, trendLabel }) {
   const trendColor = trend > 0 ? 'text-emerald-400' : trend < 0 ? 'text-red-400' : 'text-gray-500'
-
   return (
     <div className="card">
       <div className="stat-label">{label}</div>

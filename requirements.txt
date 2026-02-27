@@ -1,0 +1,2 @@
+httpx==0.25.2
+libsql-experimental==0.0.47

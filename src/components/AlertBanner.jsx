@@ -1,12 +1,7 @@
 import React from 'react'
 import { AlertTriangle, AlertCircle, Info } from 'lucide-react'
 
-const icons = {
-  warning: AlertTriangle,
-  danger: AlertCircle,
-  info: Info,
-}
-
+const icons = { warning: AlertTriangle, danger: AlertCircle, info: Info }
 const colors = {
   warning: 'border-amber-500/30 bg-amber-500/5 text-amber-400',
   danger: 'border-red-500/30 bg-red-500/5 text-red-400',
@@ -15,7 +10,6 @@ const colors = {
 
 export default function AlertBanner({ alerts = [] }) {
   if (!alerts.length) return null
-
   return (
     <div className="space-y-2 mb-6">
       {alerts.map((a, i) => {

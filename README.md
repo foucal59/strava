@@ -1,57 +1,46 @@
 # Strava Performance Dashboard
 
-Dashboard personnel de performance running base sur l'API Strava.
+Dashboard personnel de performance running deploye sur Vercel.
 
 ## Stack
 
-- **Backend**: Python FastAPI + SQLite + APScheduler
 - **Frontend**: React 18 + Vite + Tailwind CSS + Recharts
+- **Backend**: Vercel Serverless Functions (Python 3.11)
+- **Database**: Turso (SQLite cloud) ou SQLite local
 - **Auth**: OAuth 2.0 Strava
+- **Cron**: Vercel Cron (sync quotidien 4h)
 
-## Installation
+## Deploiement Vercel
 
-### 1. Backend
+1. Connecter le repo GitHub a Vercel
+2. Configurer les variables d'environnement dans Vercel Dashboard:
+   - `STRAVA_CLIENT_ID`
+   - `STRAVA_CLIENT_SECRET`
+   - `STRAVA_REDIRECT_URI` (ex: `https://votre-app.vercel.app/api/auth/callback`)
+   - `TURSO_DATABASE_URL` (ex: `libsql://votre-db.turso.io`)
+   - `TURSO_AUTH_TOKEN`
+3. Deployer
+
+## Turso (base de donnees)
 
 ```bash
-cd backend
-cp .env.example .env
-# Editer .env avec vos credentials Strava
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+# Installer Turso CLI
+curl -sSfL https://get.tur.so/install.sh | bash
+
+# Creer une base
+turso db create strava-dashboard
+
+# Recuperer l'URL
+turso db show strava-dashboard --url
+
+# Creer un token
+turso db tokens create strava-dashboard
 ```
-
-### 2. Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### 3. Configuration Strava
-
-1. Aller sur https://www.strava.com/settings/api
-2. Creer une application
-3. Recuperer Client ID et Client Secret
-4. Configurer le callback URL: `http://localhost:8000/auth/callback`
-5. Renseigner dans `backend/.env`
 
 ## Modules
 
-- **Cockpit**: synthese volume, projections Riegel, alertes
-- **Volume**: kilometrage hebdo/mensuel/annuel, rolling 90j, multi-annees
-- **Performance**: PR 5k/10k/semi/marathon, projections, evolution
-- **Segments**: Local Legends, PR segments, carte thermique
-- **Analyse**: stabilite allure, decouplage cardiaque, correlation volume/performance
-
-## Sync quotidien
-
-Le scheduler APScheduler lance un sync complet chaque jour a 4h.
-Sync incremental: seules les nouvelles activites sont recuperees.
-Snapshot Local Legends: etat quotidien enregistre pour historique.
-
-## Rate Limits Strava
-
-- 100 requetes / 15 min
-- 1000 requetes / jour
-- Delai minimum 1.2s entre requetes
+- **Cockpit**: synthese, projections Riegel, alertes
+- **Volume**: hebdo/mensuel/annuel, rolling 90j, multi-annees
+- **Performance**: PR 5k/10k/semi/marathon, projections
+- **Segments**: Local Legends, PR segments
+- **Analyse**: stabilite allure, decouplage cardiaque, correlation volume/perf
