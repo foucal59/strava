@@ -1,13 +1,16 @@
+"""OAuth callback: exchanges code for tokens, redirects to frontend with tokens in URL fragment."""
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
 import os
-from api._strava import exchange_token
-from api._db import init_db, execute
+import json
+import httpx
+
+CLIENT_ID = os.environ.get("STRAVA_CLIENT_ID", "97899")
+CLIENT_SECRET = os.environ.get("STRAVA_CLIENT_SECRET", "")
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        init_db()
         params = parse_qs(urlparse(self.path).query)
         code = params.get("code", [None])[0]
 
@@ -15,37 +18,38 @@ class handler(BaseHTTPRequestHandler):
             self.send_response(400)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Missing code parameter")
+            self.wfile.write(b"Missing code")
             return
 
         try:
-            data = exchange_token(code)
+            with httpx.Client() as client:
+                resp = client.post("https://www.strava.com/oauth/token", data={
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                    "code": code,
+                    "grant_type": "authorization_code"
+                })
+                resp.raise_for_status()
+                data = resp.json()
+
             athlete = data.get("athlete", {})
+            fragment = urlencode({
+                "access_token": data["access_token"],
+                "refresh_token": data["refresh_token"],
+                "expires_at": data["expires_at"],
+                "athlete_id": athlete.get("id", ""),
+                "firstname": athlete.get("firstname", ""),
+                "lastname": athlete.get("lastname", ""),
+                "profile": athlete.get("profile", ""),
+            })
 
-            execute("""
-                INSERT OR REPLACE INTO athlete (id, username, firstname, lastname, weight, profile_pic,
-                                                access_token, refresh_token, token_expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                athlete.get("id"),
-                athlete.get("username"),
-                athlete.get("firstname"),
-                athlete.get("lastname"),
-                athlete.get("weight"),
-                athlete.get("profile"),
-                data["access_token"],
-                data["refresh_token"],
-                data["expires_at"],
-            ))
-
-            # Redirect to frontend
-            base = os.environ.get("VERCEL_URL", "")
-            if base and not base.startswith("http"):
-                base = f"https://{base}"
-            redirect = base or "/"
+            base = os.environ.get("FRONTEND_URL", "")
+            if not base:
+                vercel_url = os.environ.get("VERCEL_URL", "")
+                base = f"https://{vercel_url}" if vercel_url else "/"
 
             self.send_response(302)
-            self.send_header("Location", f"{redirect}/?auth=success")
+            self.send_header("Location", f"{base}/#{fragment}")
             self.end_headers()
 
         except Exception as e:

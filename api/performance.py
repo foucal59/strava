@@ -1,119 +1,118 @@
 from http.server import BaseHTTPRequestHandler
 import json
 from urllib.parse import urlparse, parse_qs
-from api._db import init_db, query
-from api._helpers import fmt_time, compute_pace, compute_projections_from_db
+from datetime import datetime, timedelta
+from api._utils import extract_token, get_all_activities, compute_prs, riegel_projection, fmt_time, compute_pace
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        init_db()
+        token = extract_token(self.headers)
+        if not token:
+            self._json({"error": "No token"}, 401)
+            return
+
         params = parse_qs(urlparse(self.path).query)
         mode = params.get("mode", ["records"])[0]
 
-        if mode == "records":
-            data = self._records()
-        elif mode == "best_by_year":
-            data = self._best_by_year()
-        elif mode == "projections":
-            data = self._projections()
-        else:
-            data = {}
+        try:
+            activities = get_all_activities(token)
+            prs = compute_prs(activities)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+            if mode == "records":
+                self._json(prs)
+            elif mode == "best_by_year":
+                self._json(self._best_by_year(prs))
+            elif mode == "projections":
+                self._json(self._projections(prs, activities))
+            else:
+                self._json({})
+        except Exception as e:
+            self._json({"error": str(e)}, 500)
 
-    def _records(self):
-        rows = query("""
-            SELECT distance_type, date, time, activity_id
-            FROM personal_records ORDER BY distance_type, date
-        """)
+    def _best_by_year(self, prs):
         result = {}
-        for r in rows:
-            dt = r["distance_type"]
-            if dt not in result:
-                result[dt] = []
-            result[dt].append({
-                "date": r["date"],
-                "time": r["time"],
-                "formatted": fmt_time(r["time"]),
-                "pace": compute_pace(r["time"], dt),
-                "activity_id": r["activity_id"],
-            })
-
-        for dt in result:
-            times = result[dt]
-            if not times:
-                continue
-            best = min(times, key=lambda x: x["time"])
-            for t in times:
-                t["is_best"] = t["time"] == best["time"]
-                if best["time"] > 0:
-                    t["pct_off_best"] = round(((t["time"] - best["time"]) / best["time"]) * 100, 1)
+        for dist_type, records in prs.items():
+            by_year = {}
+            for r in records:
+                yr = r["date"][:4]
+                if yr not in by_year or r["time"] < by_year[yr]["time"]:
+                    by_year[yr] = r
+            result[dist_type] = sorted(
+                [{"year": yr, "time": v["time"], "formatted": v["formatted"], "pace": v["pace"]}
+                 for yr, v in by_year.items()],
+                key=lambda x: x["year"]
+            )
         return result
 
-    def _best_by_year(self):
-        rows = query("""
-            SELECT distance_type, strftime('%Y', date) as year, MIN(time) as best_time
-            FROM personal_records GROUP BY distance_type, year ORDER BY distance_type, year
-        """)
-        result = {}
-        for r in rows:
-            dt = r["distance_type"]
-            if dt not in result:
-                result[dt] = []
-            result[dt].append({
-                "year": r["year"],
-                "time": r["best_time"],
-                "formatted": fmt_time(r["best_time"]),
-                "pace": compute_pace(r["best_time"], dt),
-            })
-        return result
+    def _projections(self, prs, activities):
+        projections = {}
+        for src, src_dist, targets in [
+            ("10k", 10000, [("semi", 21097.5), ("marathon", 42195)]),
+            ("semi", 21097.5, [("marathon", 42195)]),
+        ]:
+            if prs.get(src):
+                best = prs[src][0]["time"]
+                for tgt_name, tgt_dist in targets:
+                    proj = riegel_projection(best, src_dist, tgt_dist)
+                    projections[f"{tgt_name}_from_{src}"] = {
+                        "seconds": round(proj),
+                        "formatted": fmt_time(round(proj)),
+                        "source_time": fmt_time(best),
+                        "source_distance": src,
+                    }
 
-    def _projections(self):
-        from datetime import date, timedelta
-        proj = compute_projections_from_db(query)
-
+        # Timeline: running best over time
         timeline = {}
         for dist_type in ["10k", "semi"]:
-            records = query("""
-                SELECT date, time FROM personal_records
-                WHERE distance_type=? ORDER BY date
-            """, (dist_type,))
-
+            sorted_runs = sorted(prs.get(dist_type, []), key=lambda x: x["date"])
             running_best = None
-            for r in records:
+            for r in sorted_runs:
                 if running_best is None or r["time"] < running_best:
                     running_best = r["time"]
                 d = r["date"][:10]
                 if d not in timeline:
                     timeline[d] = {}
                 if dist_type == "10k":
-                    timeline[d]["marathon_from_10k"] = round(running_best * ((42195/10000)**1.06))
-                    timeline[d]["semi_from_10k"] = round(running_best * ((21097.5/10000)**1.06))
+                    timeline[d]["marathon_from_10k"] = round(riegel_projection(running_best, 10000, 42195))
+                    timeline[d]["semi_from_10k"] = round(riegel_projection(running_best, 10000, 21097.5))
                 elif dist_type == "semi":
-                    timeline[d]["marathon_from_semi"] = round(running_best * ((42195/21097.5)**1.06))
+                    timeline[d]["marathon_from_semi"] = round(riegel_projection(running_best, 21097.5, 42195))
 
-        sorted_timeline = [{"date": k, **v} for k, v in sorted(timeline.items())]
-
-        d90 = (date.today() - timedelta(days=90)).isoformat()
-        vol = query(
-            "SELECT COALESCE(SUM(distance), 0)/1000 as km FROM activities WHERE date >= ? AND type='Run'",
-            (d90,), one=True
-        )["km"]
+        # Confidence based on 90d volume
+        now = datetime.now()
+        d90 = now - timedelta(days=90)
+        vol_90 = sum(
+            a["distance"] for a in activities
+            if datetime.fromisoformat(a["start_date_local"].replace("Z", "")) >= d90
+        ) / 1000
 
         confidence = "low"
-        if vol > 300:
+        if vol_90 > 300:
             confidence = "high"
-        elif vol > 150:
+        elif vol_90 > 150:
             confidence = "medium"
 
         return {
-            "current": proj,
-            "timeline": sorted_timeline,
+            "current": projections,
+            "timeline": [{"date": k, **v} for k, v in sorted(timeline.items())],
             "confidence": confidence,
-            "volume_90d_km": round(vol, 1),
+            "volume_90d_km": round(vol_90, 1),
         }
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def _json(self, data, status=200):
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")

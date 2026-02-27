@@ -1,100 +1,139 @@
 from http.server import BaseHTTPRequestHandler
 import json
 from urllib.parse import urlparse, parse_qs
-from datetime import date, timedelta
-from api._db import init_db, query
+from datetime import datetime, timedelta
+from api._utils import extract_token, get_all_activities
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        init_db()
+        token = extract_token(self.headers)
+        if not token:
+            self._json({"error": "No token"}, 401)
+            return
+
         params = parse_qs(urlparse(self.path).query)
         mode = params.get("mode", ["weekly"])[0]
 
-        if mode == "weekly":
-            data = self._weekly(params)
-        elif mode == "monthly":
-            data = self._monthly()
-        elif mode == "yearly":
-            data = self._yearly()
-        elif mode == "rolling":
-            data = self._rolling(params)
-        else:
-            data = []
+        try:
+            activities = get_all_activities(token)
+            if mode == "weekly":
+                data = self._weekly(activities, params)
+            elif mode == "monthly":
+                data = self._monthly(activities)
+            elif mode == "yearly":
+                data = self._yearly(activities)
+            elif mode == "rolling":
+                data = self._rolling(activities, params)
+            else:
+                data = []
+            self._json(data)
+        except Exception as e:
+            self._json({"error": str(e)}, 500)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+    def _parse(self, d):
+        return datetime.fromisoformat(d.replace("Z", "+00:00").replace("+00:00", ""))
 
-    def _weekly(self, params):
+    def _weekly(self, activities, params):
         years_str = params.get("years", [None])[0]
-        sql = """
-            SELECT strftime('%Y', date) as year,
-                   strftime('%W', date) as week,
-                   SUM(distance)/1000 as km,
-                   COUNT(*) as runs,
-                   SUM(moving_time) as time_s,
-                   SUM(total_elevation_gain) as elev
-            FROM activities WHERE type='Run'
-        """
-        p = []
-        if years_str:
-            year_list = years_str.split(",")
-            placeholders = ",".join(["?"] * len(year_list))
-            sql += f" AND strftime('%Y', date) IN ({placeholders})"
-            p.extend(year_list)
-        sql += " GROUP BY year, week ORDER BY year, week"
-        rows = query(sql, tuple(p))
+        year_filter = years_str.split(",") if years_str else None
+
+        buckets = {}
+        for a in activities:
+            dt = self._parse(a["start_date_local"])
+            yr = str(dt.year)
+            if year_filter and yr not in year_filter:
+                continue
+            wk = dt.strftime("%W")
+            key = (yr, wk)
+            if key not in buckets:
+                buckets[key] = {"year": yr, "week": wk, "km": 0, "runs": 0, "time_s": 0, "elev": 0}
+            buckets[key]["km"] += a["distance"] / 1000
+            buckets[key]["runs"] += 1
+            buckets[key]["time_s"] += a.get("moving_time", 0)
+            buckets[key]["elev"] += a.get("total_elevation_gain", 0)
+
+        rows = sorted(buckets.values(), key=lambda x: (x["year"], x["week"]))
+        for r in rows:
+            r["km"] = round(r["km"], 2)
+            r["elev"] = round(r["elev"], 1)
 
         for i, d in enumerate(rows):
-            window = rows[max(0, i-3):i+1]
+            window = rows[max(0, i - 3):i + 1]
             d["ma_4w"] = round(sum(w["km"] for w in window) / len(window), 2)
         return rows
 
-    def _monthly(self):
-        return query("""
-            SELECT strftime('%Y', date) as year,
-                   strftime('%m', date) as month,
-                   SUM(distance)/1000 as km,
-                   COUNT(*) as runs,
-                   SUM(moving_time) as time_s
-            FROM activities WHERE type='Run'
-            GROUP BY year, month ORDER BY year, month
-        """)
+    def _monthly(self, activities):
+        buckets = {}
+        for a in activities:
+            dt = self._parse(a["start_date_local"])
+            key = (str(dt.year), f"{dt.month:02d}")
+            if key not in buckets:
+                buckets[key] = {"year": key[0], "month": key[1], "km": 0, "runs": 0, "time_s": 0}
+            buckets[key]["km"] += a["distance"] / 1000
+            buckets[key]["runs"] += 1
+            buckets[key]["time_s"] += a.get("moving_time", 0)
 
-    def _yearly(self):
-        return query("""
-            SELECT strftime('%Y', date) as year,
-                   SUM(distance)/1000 as km,
-                   COUNT(*) as runs,
-                   SUM(moving_time) as time_s,
-                   SUM(total_elevation_gain) as elev
-            FROM activities WHERE type='Run'
-            GROUP BY year ORDER BY year
-        """)
+        rows = sorted(buckets.values(), key=lambda x: (x["year"], x["month"]))
+        for r in rows:
+            r["km"] = round(r["km"], 2)
+        return rows
 
-    def _rolling(self, params):
+    def _yearly(self, activities):
+        buckets = {}
+        for a in activities:
+            dt = self._parse(a["start_date_local"])
+            yr = str(dt.year)
+            if yr not in buckets:
+                buckets[yr] = {"year": yr, "km": 0, "runs": 0, "time_s": 0, "elev": 0}
+            buckets[yr]["km"] += a["distance"] / 1000
+            buckets[yr]["runs"] += 1
+            buckets[yr]["time_s"] += a.get("moving_time", 0)
+            buckets[yr]["elev"] += a.get("total_elevation_gain", 0)
+
+        rows = sorted(buckets.values(), key=lambda x: x["year"])
+        for r in rows:
+            r["km"] = round(r["km"], 2)
+            r["elev"] = round(r["elev"], 1)
+        return rows
+
+    def _rolling(self, activities, params):
         days = int(params.get("days", [90])[0])
-        today = date.today()
+        today = datetime.now()
         start = today - timedelta(days=days * 2)
 
-        rows = query("""
-            SELECT date, distance/1000 as km
-            FROM activities WHERE date >= ? AND type='Run' ORDER BY date
-        """, (start.isoformat(),))
-
         daily = {}
-        for r in rows:
-            d = r["date"][:10]
-            daily[d] = daily.get(d, 0) + r["km"]
+        for a in activities:
+            dt = self._parse(a["start_date_local"])
+            if dt < start:
+                continue
+            d = dt.strftime("%Y-%m-%d")
+            daily[d] = daily.get(d, 0) + a["distance"] / 1000
 
         result = []
         d = start
         while d <= today:
+            ds = d.strftime("%Y-%m-%d")
             window_start = d - timedelta(days=days)
-            total = sum(v for k, v in daily.items() if window_start.isoformat() <= k <= d.isoformat())
-            result.append({"date": d.isoformat(), "km": round(total, 2)})
+            ws = window_start.strftime("%Y-%m-%d")
+            total = sum(v for k, v in daily.items() if ws <= k <= ds)
+            result.append({"date": ds, "km": round(total, 2)})
             d += timedelta(days=1)
         return result
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def _json(self, data, status=200):
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")

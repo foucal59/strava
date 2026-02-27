@@ -1,127 +1,93 @@
 from http.server import BaseHTTPRequestHandler
 import json
 from urllib.parse import urlparse, parse_qs
-from api._db import init_db, query
-from api._helpers import fmt_time
+from api._utils import extract_token, strava_get, fmt_time
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        init_db()
+        token = extract_token(self.headers)
+        if not token:
+            self._json({"error": "No token"}, 401)
+            return
+
         params = parse_qs(urlparse(self.path).query)
-        mode = params.get("mode", ["legends"])[0]
+        mode = params.get("mode", ["starred"])[0]
 
-        if mode == "legends":
-            data = self._legends()
-        elif mode == "prs":
-            data = self._prs()
-        elif mode == "heatmap":
-            data = self._heatmap()
-        else:
-            data = {}
+        try:
+            if mode == "starred":
+                self._json(self._starred(token))
+            elif mode == "legends":
+                self._json(self._legends(token))
+            else:
+                self._json([])
+        except Exception as e:
+            self._json({"error": str(e)}, 500)
 
+    def _starred(self, token):
+        """Fetch starred segments with local legend status."""
+        segments = []
+        page = 1
+        while True:
+            batch = strava_get(token, "/segments/starred", {"page": page, "per_page": 100})
+            if not batch:
+                break
+            segments.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+        result = []
+        for s in segments:
+            result.append({
+                "id": s["id"],
+                "name": s["name"],
+                "distance": s.get("distance"),
+                "average_grade": s.get("average_grade"),
+                "climb_category": s.get("climb_category"),
+                "city": s.get("city"),
+                "state": s.get("state"),
+                "athlete_pr_effort": s.get("athlete_pr_effort"),
+            })
+        return result
+
+    def _legends(self, token):
+        """Check local legend status on starred segments."""
+        starred = strava_get(token, "/segments/starred", {"per_page": 50})
+        legends = []
+        for s in starred[:30]:  # Limit to avoid rate limits
+            try:
+                detail = strava_get(token, f"/segments/{s['id']}")
+                ll = detail.get("local_legend") or {}
+                if ll.get("is_local_legend"):
+                    legends.append({
+                        "segment_id": s["id"],
+                        "name": s["name"],
+                        "effort_count": ll.get("effort_count", 0),
+                    })
+            except Exception:
+                continue
+
+        return {
+            "current": legends,
+            "total": len(legends),
+            "timeline": {},
+            "monthly": [],
+        }
+
+    def do_OPTIONS(self):
         self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def _json(self, data, status=200):
+        self.send_response(status)
+        self._cors()
         self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
-    def _legends(self):
-        latest = query("SELECT MAX(date) as d FROM local_legend_snapshot", one=True)
-        latest_date = latest["d"] if latest else None
-        current = []
-        if latest_date:
-            current = query("""
-                SELECT ll.segment_id, s.name, ll.effort_count
-                FROM local_legend_snapshot ll
-                JOIN segments s ON s.id = ll.segment_id
-                WHERE ll.date = ? AND ll.is_local_legend = 1
-            """, (latest_date,))
-
-        timeline_rows = query("""
-            SELECT ll.date, ll.segment_id, s.name, ll.is_local_legend
-            FROM local_legend_snapshot ll
-            JOIN segments s ON s.id = ll.segment_id
-            ORDER BY ll.segment_id, ll.date
-        """)
-
-        segments_tl = {}
-        for r in timeline_rows:
-            sid = r["segment_id"]
-            if sid not in segments_tl:
-                segments_tl[sid] = {"name": r["name"], "periods": [], "_cur": None}
-            st = segments_tl[sid]
-            if r["is_local_legend"]:
-                if not st["_cur"]:
-                    st["_cur"] = {"start": r["date"]}
-            else:
-                if st["_cur"]:
-                    st["_cur"]["end"] = r["date"]
-                    st["periods"].append(st["_cur"])
-                    st["_cur"] = None
-
-        for sid, st in segments_tl.items():
-            if st["_cur"]:
-                st["_cur"]["end"] = None
-                st["periods"].append(st["_cur"])
-            del st["_cur"]
-
-        monthly = query("""
-            SELECT strftime('%Y-%m', date) as month,
-                   SUM(CASE WHEN is_local_legend = 1 THEN 1 ELSE 0 END) as legends,
-                   COUNT(DISTINCT segment_id) as segments_tracked
-            FROM local_legend_snapshot GROUP BY month ORDER BY month
-        """)
-
-        return {
-            "current": current,
-            "total": len(current),
-            "timeline": {str(k): {"name": v["name"], "periods": v["periods"]} for k, v in segments_tl.items()},
-            "monthly": monthly,
-        }
-
-    def _prs(self):
-        monthly = query("""
-            SELECT strftime('%Y-%m', date) as month, COUNT(*) as prs
-            FROM segment_efforts WHERE pr_rank = 1
-            GROUP BY month ORDER BY month
-        """)
-
-        top = query("""
-            SELECT se.segment_id, s.name, COUNT(*) as efforts,
-                   MIN(se.elapsed_time) as best_time,
-                   MAX(se.elapsed_time) as worst_time
-            FROM segment_efforts se
-            JOIN segments s ON s.id = se.segment_id
-            GROUP BY se.segment_id ORDER BY efforts DESC LIMIT 20
-        """)
-
-        progression = {}
-        for seg in top:
-            efforts = query("""
-                SELECT date, elapsed_time, pr_rank
-                FROM segment_efforts WHERE segment_id = ? ORDER BY date
-            """, (seg["segment_id"],))
-            progression[seg["segment_id"]] = {
-                "name": seg["name"],
-                "best": seg["best_time"],
-                "efforts": efforts,
-            }
-
-        return {
-            "monthly_prs": monthly,
-            "top_segments": top,
-            "progression": progression,
-        }
-
-    def _heatmap(self):
-        return query("""
-            SELECT s.id, s.name, s.start_latlng, s.end_latlng,
-                   COUNT(se.id) as efforts,
-                   MIN(se.elapsed_time) as best_time,
-                   MAX(CASE WHEN se.pr_rank = 1 THEN 1 ELSE 0 END) as has_pr
-            FROM segments s
-            LEFT JOIN segment_efforts se ON se.segment_id = s.id
-            WHERE s.start_latlng IS NOT NULL
-            GROUP BY s.id
-        """)
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")

@@ -2,89 +2,102 @@ from http.server import BaseHTTPRequestHandler
 import json
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timedelta
-from api._db import init_db, query
-from api._helpers import fmt_time
+from api._utils import extract_token, get_all_activities, fmt_time, match_distance
 
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        init_db()
+        token = extract_token(self.headers)
+        if not token:
+            self._json({"error": "No token"}, 401)
+            return
+
         params = parse_qs(urlparse(self.path).query)
         mode = params.get("mode", ["pace"])[0]
 
-        if mode == "pace":
-            data = self._pace_stability()
-        elif mode == "cardiac":
-            data = self._cardiac()
-        elif mode == "volume_perf":
-            data = self._volume_vs_perf()
-        else:
-            data = []
+        try:
+            activities = get_all_activities(token)
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+            if mode == "pace":
+                self._json(self._pace(activities))
+            elif mode == "cardiac":
+                self._json(self._cardiac(activities))
+            elif mode == "volume_perf":
+                self._json(self._vol_perf(activities))
+            else:
+                self._json([])
+        except Exception as e:
+            self._json({"error": str(e)}, 500)
 
-    def _pace_stability(self):
-        rows = query("""
-            SELECT id, date, name, distance, moving_time, average_speed, average_heartrate
-            FROM activities WHERE type='Run' AND distance > 3000
-            ORDER BY date DESC LIMIT 100
-        """)
+    def _pace(self, activities):
         result = []
-        for r in rows:
-            pace = r["moving_time"] / (r["distance"] / 1000) if r["distance"] > 0 else 0
+        runs = [a for a in activities if a.get("distance", 0) > 3000]
+        runs.sort(key=lambda x: x["start_date_local"], reverse=True)
+        for a in runs[:100]:
+            pace = a["moving_time"] / (a["distance"] / 1000) if a["distance"] > 0 else 0
             result.append({
-                "date": r["date"],
-                "name": r["name"],
-                "distance_km": round(r["distance"] / 1000, 2),
+                "date": a["start_date_local"],
+                "name": a.get("name", ""),
+                "distance_km": round(a["distance"] / 1000, 2),
                 "pace_s_km": round(pace, 1),
                 "pace_formatted": f"{int(pace // 60)}:{int(pace % 60):02d}",
-                "heartrate": r["average_heartrate"],
+                "heartrate": a.get("average_heartrate"),
             })
         return result
 
-    def _cardiac(self):
-        rows = query("""
-            SELECT date, name, distance, moving_time, average_speed,
-                   average_heartrate, max_heartrate
-            FROM activities
-            WHERE type='Run' AND average_heartrate IS NOT NULL AND distance > 5000
-            ORDER BY date DESC LIMIT 200
-        """)
+    def _cardiac(self, activities):
         result = []
-        for r in rows:
-            pace = r["moving_time"] / (r["distance"] / 1000) if r["distance"] > 0 else 0
-            efficiency = (r["average_speed"] * 3.6) / r["average_heartrate"] if r["average_heartrate"] else None
+        runs = [a for a in activities if a.get("average_heartrate") and a.get("distance", 0) > 5000]
+        runs.sort(key=lambda x: x["start_date_local"], reverse=True)
+        for a in runs[:200]:
+            pace = a["moving_time"] / (a["distance"] / 1000) if a["distance"] > 0 else 0
+            speed_kmh = a.get("average_speed", 0) * 3.6
+            eff = speed_kmh / a["average_heartrate"] if a["average_heartrate"] else None
             result.append({
-                "date": r["date"],
-                "name": r["name"],
+                "date": a["start_date_local"],
+                "name": a.get("name", ""),
                 "pace_s_km": round(pace, 1),
-                "avg_hr": r["average_heartrate"],
-                "max_hr": r["max_heartrate"],
-                "efficiency": round(efficiency, 4) if efficiency else None,
+                "avg_hr": a["average_heartrate"],
+                "max_hr": a.get("max_heartrate"),
+                "efficiency": round(eff, 4) if eff else None,
             })
         return result
 
-    def _volume_vs_perf(self):
-        runs_10k = query("""
-            SELECT date, time FROM personal_records
-            WHERE distance_type='10k' ORDER BY date
-        """)
+    def _vol_perf(self, activities):
+        runs_10k = sorted(
+            [a for a in activities if match_distance(a.get("distance", 0), "10k")],
+            key=lambda x: x["start_date_local"]
+        )
         result = []
         for r in runs_10k:
-            d = r["date"][:10]
-            d30 = (datetime.fromisoformat(d) - timedelta(days=30)).isoformat()
-            vol = query(
-                "SELECT COALESCE(SUM(distance), 0)/1000 as km FROM activities WHERE date BETWEEN ? AND ? AND type='Run'",
-                (d30, d), one=True
-            )["km"]
+            d = r["start_date_local"][:10]
+            dt = datetime.fromisoformat(d)
+            d30 = dt - timedelta(days=30)
+            vol = sum(
+                a["distance"] for a in activities
+                if d30.isoformat() <= a["start_date_local"][:10] <= d
+            ) / 1000
             result.append({
                 "date": d,
-                "time_10k": r["time"],
-                "formatted": fmt_time(r["time"]),
+                "time_10k": r["moving_time"],
+                "formatted": fmt_time(r["moving_time"]),
                 "volume_30d_km": round(vol, 1),
             })
         return result
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
+
+    def _json(self, data, status=200):
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")

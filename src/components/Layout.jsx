@@ -1,7 +1,6 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { NavLink } from 'react-router-dom'
-import { Activity, BarChart3, Trophy, Map, LineChart, RefreshCw } from 'lucide-react'
-import { api } from '../api'
+import { Activity, BarChart3, Trophy, Map, LineChart, LogOut } from 'lucide-react'
 
 const navItems = [
   { to: '/', icon: Activity, label: 'Cockpit' },
@@ -11,23 +10,7 @@ const navItems = [
   { to: '/analysis', icon: LineChart, label: 'Analyse' },
 ]
 
-export default function Layout({ children, athlete }) {
-  const [syncing, setSyncing] = useState(false)
-  const [syncResult, setSyncResult] = useState(null)
-
-  const handleSync = async () => {
-    setSyncing(true)
-    setSyncResult(null)
-    try {
-      const r = await api.triggerSync()
-      setSyncResult(r)
-      setTimeout(() => window.location.reload(), 1500)
-    } catch (e) {
-      setSyncResult({ error: e.message })
-    }
-    setSyncing(false)
-  }
-
+export default function Layout({ children, athlete, onLogout }) {
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-dark-600 bg-dark-800/80 backdrop-blur-sm sticky top-0 z-50">
@@ -46,19 +29,17 @@ export default function Layout({ children, athlete }) {
             </nav>
           </div>
           <div className="flex items-center gap-4">
-            <button onClick={handleSync} disabled={syncing}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm bg-dark-700 hover:bg-dark-600 transition-colors disabled:opacity-50">
-              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-              {syncing ? 'Sync...' : 'Sync'}
-            </button>
-            {syncResult && !syncResult.error && (
-              <span className="text-xs text-emerald-400">{syncResult.activities_synced} activites</span>
-            )}
             {athlete && (
               <div className="flex items-center gap-2">
                 {athlete.profile_pic && <img src={athlete.profile_pic} alt="" className="w-7 h-7 rounded-full" />}
                 <span className="text-sm text-gray-400">{athlete.firstname}</span>
               </div>
+            )}
+            {onLogout && (
+              <button onClick={onLogout}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-gray-500 hover:text-white bg-dark-700 hover:bg-dark-600 transition-colors">
+                <LogOut size={14} />
+              </button>
             )}
           </div>
         </div>
