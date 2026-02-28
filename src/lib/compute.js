@@ -97,7 +97,9 @@ export function computeCockpit(activities) {
   ]
   projSources.forEach(([src, srcDist, targets]) => {
     if (prs[src]?.length) {
-      const best = prs[src][0].time
+      const bestRec = prs[src][0]
+      const best = bestRec.time
+      const bestDate = bestRec.date?.slice(0, 10) || ''
       targets.forEach(([tgtName, tgtDist]) => {
         const proj = riegel(best, srcDist, tgtDist)
         projections[`${tgtName}_from_${src}`] = {
@@ -105,6 +107,7 @@ export function computeCockpit(activities) {
           formatted: fmtTime(Math.round(proj)),
           source_time: fmtTime(best),
           source_distance: src,
+          source_date: bestDate,
         }
       })
     }
