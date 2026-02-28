@@ -2,6 +2,7 @@ import React from 'react'
 import { NavLink } from 'react-router-dom'
 import { Activity, BarChart3, Trophy, Map, LineChart, LogOut, RefreshCw } from 'lucide-react'
 import { useActivities } from '../contexts/ActivityContext'
+import DateRangeFilter from './DateRangeFilter'
 
 const navItems = [
   { to: '/', icon: Activity, label: 'Cockpit' },
@@ -68,6 +69,8 @@ export default function Layout({ children, athlete, onLogout }) {
           </div>
         </div>
       </header>
+
+      <DateRangeFilter />
 
       <nav className="md:hidden flex items-center gap-1 px-4 py-2 border-b border-dark-600 bg-dark-800 overflow-x-auto">
         {navItems.map(({ to, icon: Icon, label }) => (
