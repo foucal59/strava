@@ -309,8 +309,8 @@ export function computeProjections(prs, activities) {
 export function computePaceStability(activities) {
   return activities
     .filter(a => (a.distance || 0) > 3000)
-    .sort((a, b) => b.start_date_local.localeCompare(a.start_date_local))
-    .slice(0, 100)
+    .sort((a, b) => a.start_date_local.localeCompare(b.start_date_local))
+    .slice(-100)
     .map(a => {
       const pace = a.moving_time / (a.distance / 1000)
       return {
@@ -327,8 +327,8 @@ export function computePaceStability(activities) {
 export function computeCardiacDecoupling(activities) {
   return activities
     .filter(a => a.average_heartrate && (a.distance || 0) > 5000)
-    .sort((a, b) => b.start_date_local.localeCompare(a.start_date_local))
-    .slice(0, 200)
+    .sort((a, b) => a.start_date_local.localeCompare(b.start_date_local))
+    .slice(-200)
     .map(a => {
       const pace = a.moving_time / (a.distance / 1000)
       const speedKmh = (a.average_speed || 0) * 3.6

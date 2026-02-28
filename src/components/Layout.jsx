@@ -46,14 +46,13 @@ export default function Layout({ children, athlete, onLogout }) {
             </nav>
           </div>
           <div className="flex items-center gap-4">
-            <div className="hidden md:flex items-center gap-2 text-xs text-gray-500">
-              <span>{lastSyncLabel}</span>
-              <button onClick={refresh} disabled={syncing}
-                className={`p-1 rounded hover:bg-dark-600 transition-colors ${syncing ? 'animate-spin text-strava' : ''}`}
-                title="Forcer la synchronisation">
-                <RefreshCw size={14} />
-              </button>
-            </div>
+            <button onClick={refresh} disabled={syncing}
+              className={`hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-all duration-200 ${
+                syncing ? 'bg-strava/10 text-strava' : 'bg-dark-700 text-gray-400 hover:text-white hover:bg-dark-600'}`}
+              title="Forcer la synchronisation">
+              <RefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
+              <span>{syncing ? 'Sync...' : lastSyncLabel}</span>
+            </button>
             {athlete && (
               <div className="flex items-center gap-2">
                 {athlete.profile_pic && <img src={athlete.profile_pic} alt="" className="w-7 h-7 rounded-full" />}
